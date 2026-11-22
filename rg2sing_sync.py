@@ -142,10 +142,7 @@ def build(score,work,lex,old,strict=True):
   crowded={t:sorted(v) for t,v in seen.items() if len(v)>1}
   if crowded:raise ValueError(f'{part} contient des divisi à traiter : {crowded}')
   rows=[];j=0
-  own_lyrics = any(
-    str(n.get('lyric') or '').strip() not in ('', '+')
-    for n in raw
-)
+  own_lyrics = any(str(n.get('lyric') or '').strip() not in ('', '+') for n in raw)
   if own_lyrics:
    for n in raw:
     r=apply_old(new_note(n,tempo),old[part],lex)
@@ -219,10 +216,11 @@ def main():
  ap.add_argument('--seed',type=Path,default=None,help='JSON phonétique de référence des premières mesures')
  ap.add_argument('--force',action='store_true',help='Autoriser la mise à jour des fichiers de révision (sauvegarde automatique)')
  ap.add_argument('--layout',choices=['auto','satb-2staves','satb-4staves'],default='auto')
+ ap.add_argument('--force-satb',action='store_true',help='Attribuer S/A/T/B aux quatre pistes contenant des notes, dans l’ordre croissant des identifiants ; ignore les noms de segments')
  ap.add_argument('--upper-staff',help='Nom de la portée supérieure du fichier .rg')
  ap.add_argument('--lower-staff',help='Nom de la portée inférieure du fichier .rg')
  a=ap.parse_args()
- model,staff_diag=split_staff_model(parse(a.rg),layout=a.layout,upper_staff=a.upper_staff,lower_staff=a.lower_staff)
+ model,staff_diag=split_staff_model(parse(a.rg),layout=a.layout,upper_staff=a.upper_staff,lower_staff=a.lower_staff,force_satb=a.force_satb)
  model['staff_layout']=staff_diag['layout']
  scorepath=a.output_dir/'score.json';work=a.output_dir/'full'
  paths=[scorepath]+[work/f'{p}.review.json' for p in PARTS]

@@ -25,7 +25,7 @@ def stem_up(event):
     return None
 
 
-def split_staff_model(model, layout='auto', upper_staff=None, lower_staff=None):
+def split_staff_model(model, layout='auto', upper_staff=None, lower_staff=None, force_satb=False):
     """Retourne (modèle_normalisé, diagnostic), sans modifier le modèle d'entrée.
 
     Les quatre voix explicitement nommées sont conservées même lorsque leurs
@@ -44,6 +44,28 @@ def split_staff_model(model, layout='auto', upper_staff=None, lower_staff=None):
                   set(normalized_parts.values()) == set(VOICE_ORDER) and
                   None not in normalized_parts.values())
     distinct_tracks = {t for ids in tracks.values() for t in ids}
+    force_mapping = None
+    if force_satb:
+        # L'utilisateur confirme explicitement que les pistes musicales
+        # distinctes, dans l'ordre des track_id, correspondent à SATB.
+        # Les noms des instruments et des segments sont alors ignorés.
+        track_ids = sorted(distinct_tracks)
+        if len(track_ids) != 4:
+            raise ValueError(
+                '--force-satb exige exactement quatre pistes contenant des notes ; '
+                f'trouvé {len(track_ids)} : {track_ids}'
+            )
+        if layout not in ('auto', 'satb-4staves'):
+            raise ValueError('--force-satb est incompatible avec --layout satb-2staves')
+        force_mapping = dict(zip(track_ids, VOICE_ORDER))
+        layout = 'satb-4staves'
+    # Un appel explicite satb-4staves doit aussi accepter un modèle
+    # partiel (p. ex. seulement Soprani pour un test de chronologie).
+    # Aucun renommage arbitraire : toutes les parties doivent être connues
+    # et leurs noms canoniques ne doivent pas entrer en collision.
+    named_subset = (layout == 'satb-4staves' and bool(parts) and
+                    all(normalized_parts[p] is not None for p in parts) and
+                    len(set(normalized_parts.values())) == len(parts))
     two_tracks_named = named_four and len(distinct_tracks) == 2
     if layout == 'auto':
         if named_four:
@@ -62,7 +84,19 @@ def split_staff_model(model, layout='auto', upper_staff=None, lower_staff=None):
             'stem_missing': [], 'lyric_assumptions': [],
             'negative_tick_shift': 0, 'note_counts': {}}
 
-    if named_four:
+    if force_mapping is not None:
+        # Chaque segment conserve ses événements, accords, paroles et temps.
+        # Seule la partie logique est attribuée par identifiant de piste.
+        for seg in source['segments']:
+            if seg['track_id'] in force_mapping:
+                seg['part'] = force_mapping[seg['track_id']]
+        diag['staff_mapping'] = {
+            str(track): {'as': part} for track, part in force_mapping.items()
+        }
+        diag['already_separated'] = True
+        diag['forced_satb'] = True
+        diag['track_count'] = len(force_mapping)
+    elif named_four or named_subset:
         # Ne pas redistribuer par hampes des voix déjà identifiées. Un track_id
         # est une information physique, non une preuve de la voix chantée.
         for seg in source['segments']:
