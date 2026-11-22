@@ -9,12 +9,10 @@ from pathlib import Path
 from rg2sing import parse,seconds,validate
 from export_ustx import segment_notes
 from rg2sing_staves import split_staff_model
-from rg2sing_lyrics import align_lyrics
+from rg2sing_lyrics import align_lyrics, resolve_lyric_contractions
 
 SR,HOP=44100,512
 PARTS=('Soprani','Alti','Tenors','Basses')
-# Chaque annotation chantée par les hommes correspond à trois notes supplémentaires
-# dans la partition source examinée. Ne pas extrapoler silencieusement.
 EXTRA_SYLLABLES={
  'dans la nuit':['dans','la','nuit'],
  'cette nuit':['cet','te','nuit'],
@@ -82,7 +80,6 @@ def annotation_regions(score):
  Returns the original passage's onsets; never infers notes from missing data.
  """
  sop=segment_notes(score,'Soprani')
- # Each note on a chord can share onset; use sorted unique lyric-bearing onsets.
  lyrical=sorted({n['tick'] for n in sop if n['lyric'] not in (None,'','+')})
  events=collections.defaultdict(list)
  for seg in score['segments']:
@@ -120,7 +117,6 @@ def build(score,work,lex,old,strict=True):
   primary.append(row)
   if len(pitches)>1:
    chord_info.append({'tick':t,'pitches':pitches,'syllable':row['syllable']})
-   # Only the extra pitch(es) need independent neural synthesis.
    for pitch in pitches[1:]:
     n=next(x for x in notes if x['pitch']==pitch)
     copy=apply_old(new_note(n,tempo,syllable=row['syllable']),old['Soprani_divisi'],lex)
@@ -141,17 +137,11 @@ def build(score,work,lex,old,strict=True):
  reference_by_part={}
  for part in PARTS[1:]:
   raw=segment_notes(score,part)
-  # This score has one melodic note per timestamp in A/T/B.
-  # Preserve distinct pitch entries, but reject simultaneous chords for now.
   seen=collections.defaultdict(set)
   for n in raw:seen[n['tick']].add(n['pitch'])
   crowded={t:sorted(v) for t,v in seen.items() if len(v)>1}
   if crowded:raise ValueError(f'{part} contient des divisi à traiter : {crowded}')
   rows=[];j=0
-  # Priorité ABSOLUE aux paroles explicitement portées par ce pupitre.
-  # Sinon, suivre le flux de paroles du pupitre principal du même groupe :
-  # Soprani -> Alti ; Tenors -> Basses. Jamais Soprani -> Basses si
-  # les ténors possèdent leurs propres paroles.
   own_lyrics = any(n.get('lyric') not in (None, '') for n in raw)
   if own_lyrics:
    for n in raw:
@@ -165,10 +155,9 @@ def build(score,work,lex,old,strict=True):
                 else reference_by_part.get('Tenors',[]))
    if not reference:
     raise ValueError(f'{part}: paroles de {reference_part} non disponibles')
-   # Ne pas demander au moteur d'alignement de placer une syllabe vide,
-   # ou une prolongation, comme si c'était une nouvelle syllabe.
    ref_syllables=[r for r in reference if r.get('syllable') not in ('','+')]
    assignments,info=align_lyrics(ref_syllables,raw)
+   contractions,info=resolve_lyric_contractions(ref_syllables,raw,assignments,info)
    info['source']=reference_part
    info['method']='sequential'
    info['unassigned_lyrics_details']=[
@@ -180,7 +169,13 @@ def build(score,work,lex,old,strict=True):
    for idx,n in enumerate(raw):
     r=new_note(n,tempo)
     source=assignments[idx]
-    if source is not None:
+    if idx in contractions:
+     contraction=contractions[idx]
+     r['syllable']=contraction['syllable']
+     r['word_continues']=contraction['word_continues']
+     r['phonemes']=[]
+     r['origin']='contracted_syllables_pending'
+    elif source is not None:
      ref=ref_syllables[source]
      r['syllable']=ref['syllable']
      r['word_continues']=ref.get('word_continues',False)
@@ -195,8 +190,6 @@ def build(score,work,lex,old,strict=True):
   if part=='Tenors':
    reference_by_part['Tenors']=rows
   for start,stop,lyric,syllables in regions:
-   # Every parenthetical phrase applies ONLY to the extra male notes after
-   # the main sung syllable, and before the next soprano syllable.
    targets=[r for r in rows if start<r['tick']<stop]
    if part in ('Tenors','Basses'):
     if len(targets)!=len(syllables):
@@ -207,9 +200,7 @@ def build(score,work,lex,old,strict=True):
      r['origin']='parenthesis_aligned_proposed' if r['phonemes'] else 'missing'
      extras.append({'part':part,'tick':r['tick'],'syllable':syll,'annotation':lyric})
    elif targets:
-    # Altos should have no added lyrics; report any notes here only.
     extras.append({'part':part,'tick':start,'info':f'{len(targets)} additional note(s) but no parenthesized words assigned'})
-  # Keep earlier manual phoneme corrections with matching syllable outside annotations.
   for r in rows:
    previous=old[part].get((r['tick'],r['midi']))
    if previous and previous.get('origin','').startswith('manual') and previous.get('syllable')==r['syllable']:
