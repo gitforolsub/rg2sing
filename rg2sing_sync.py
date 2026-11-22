@@ -142,7 +142,10 @@ def build(score,work,lex,old,strict=True):
   crowded={t:sorted(v) for t,v in seen.items() if len(v)>1}
   if crowded:raise ValueError(f'{part} contient des divisi à traiter : {crowded}')
   rows=[];j=0
-  own_lyrics = any(n.get('lyric') not in (None, '') for n in raw)
+  own_lyrics = any(
+    str(n.get('lyric') or '').strip() not in ('', '+')
+    for n in raw
+)
   if own_lyrics:
    for n in raw:
     r=apply_old(new_note(n,tempo),old[part],lex)
